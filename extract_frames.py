@@ -4,6 +4,7 @@ Usage:
     python extract_frames.py <input_video> [--interval 0.5] [--out frames]
 """
 import argparse
+import glob
 import os
 
 import cv2
@@ -11,6 +12,11 @@ import cv2
 
 def extract_frames(video_path: str, out_dir: str, interval_sec: float) -> list[str]:
     os.makedirs(out_dir, exist_ok=True)
+
+    # Remove frames left over from a previous run so a shorter video can't end up
+    # with stale, higher-numbered frames from an earlier, longer one mixed in.
+    for stale_frame in glob.glob(os.path.join(out_dir, "frame_*.jpg")):
+        os.remove(stale_frame)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
