@@ -9,15 +9,20 @@ Steps:
      last 10 samples.
   4. Compute a single 9:16 crop window size from the source resolution, and a
      per-timestamp crop position from the smoothed centers.
-  5. Drive ffmpeg's crop filter with a piecewise time expression to produce
-     output_vertical.mp4.
+  5. Drive ffmpeg's crop filter via the sendcmd filter (one x/y update per
+     timestamp) to produce output_vertical.mp4. sendcmd is used instead of a
+     single nested if(lt(t,...),...) expression because that expression's
+     nesting depth grows with the number of samples and exceeds ffmpeg's
+     expression parser limit on anything longer than a few seconds of video.
 
 Usage:
     python smooth_and_crop.py <input_video> [--coords coordinates.json] [--interval 0.5] [--out output_vertical.mp4]
 """
 import argparse
 import json
+import os
 import subprocess
+import tempfile
 
 import cv2
 
@@ -75,12 +80,16 @@ def compute_crop_size(frame_w: int, frame_h: int):
     return crop_w, crop_h
 
 
-def build_position_expr(values, timestamps):
-    """Build a piecewise ffmpeg time expression: value holds until the next timestamp."""
-    expr = f"{values[-1]:.2f}"
-    for t, v in reversed(list(zip(timestamps[1:], values[:-1]))):
-        expr = f"if(lt(t,{t:.3f}),{v:.2f},{expr})"
-    return expr
+def write_sendcmd_file(xs, ys, timestamps, path: str) -> None:
+    """Write an ffmpeg sendcmd script: one crop x/y update per sample timestamp."""
+    with open(path, "w", encoding="ascii") as f:
+        for t, x, y in zip(timestamps, xs, ys):
+            f.write(f"{t:.3f} crop x {x:.2f}, crop y {y:.2f};\n")
+
+
+def ffmpeg_escape_path(path: str) -> str:
+    """Escape a filesystem path for use as an ffmpeg filter option value."""
+    return path.replace("\\", "/").replace(":", "\\:")
 
 
 def run(video_path: str, coords_path: str, interval: float, out_path: str) -> str:
@@ -104,26 +113,31 @@ def run(video_path: str, coords_path: str, interval: float, out_path: str) -> st
         xs.append(x)
         ys.append(y)
 
-    x_expr = build_position_expr(xs, timestamps)
-    y_expr = build_position_expr(ys, timestamps)
+    fd, commands_path = tempfile.mkstemp(suffix=".txt", prefix="crop_cmds_")
+    os.close(fd)
+    try:
+        write_sendcmd_file(xs, ys, timestamps, commands_path)
+        escaped_commands_path = ffmpeg_escape_path(commands_path)
 
-    vf = f"crop=w={crop_w}:h={crop_h}:x='{x_expr}':y='{y_expr}'"
+        vf = f"sendcmd=f='{escaped_commands_path}',crop=w={crop_w}:h={crop_h}:x={xs[0]:.2f}:y={ys[0]:.2f}"
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-vf", vf,
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        out_path,
-    ]
-    print(f"[smooth_and_crop] source={frame_w}x{frame_h} crop={crop_w}x{crop_h} samples={len(smoothed_centers)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(result.stdout)
-        print(result.stderr)
-        raise RuntimeError(f"ffmpeg failed with exit code {result.returncode}")
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            out_path,
+        ]
+        print(f"[smooth_and_crop] source={frame_w}x{frame_h} crop={crop_w}x{crop_h} samples={len(smoothed_centers)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(result.stdout)
+            print(result.stderr)
+            raise RuntimeError(f"ffmpeg failed with exit code {result.returncode}")
+    finally:
+        os.remove(commands_path)
 
     print(f"[smooth_and_crop] wrote {out_path}")
     return out_path
