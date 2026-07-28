@@ -6,7 +6,8 @@ of source video (seconds of processing per minute of input).
 Usage:
     python measure.py <input_video> [--interval 0.5] [--frames frames]
                        [--model models/blaze_face_full_range.tflite]
-                       [--coords coordinates.json] [--out output_vertical.mp4]
+                       [--pose-model models/pose_landmarker_lite.task]
+                       [--coords coordinates.json] [--pose pose.json] [--out output_vertical.mp4]
 """
 import argparse
 import time
@@ -15,6 +16,7 @@ import cv2
 
 import extract_frames
 import detect_face
+import detect_pose
 import smooth_and_crop
 
 
@@ -24,7 +26,9 @@ def main():
     parser.add_argument("--interval", type=float, default=0.5, help="Frame sampling interval in seconds")
     parser.add_argument("--frames", default="frames", help="Directory for extracted frames")
     parser.add_argument("--model", default="models/blaze_face_full_range.tflite", help="Path to MediaPipe face detector model")
-    parser.add_argument("--coords", default="coordinates.json", help="Output path for detected coordinates")
+    parser.add_argument("--pose-model", default="models/pose_landmarker_lite.task", help="Path to MediaPipe pose landmarker model")
+    parser.add_argument("--coords", default="coordinates.json", help="Output path for detected face coordinates")
+    parser.add_argument("--pose", default="pose.json", help="Output path for detected pose landmarks")
     parser.add_argument("--out", default="output_vertical.mp4", help="Output cropped video path")
     args = parser.parse_args()
 
@@ -45,7 +49,10 @@ def main():
     detect_face.detect_faces(args.frames, args.model, args.coords)
     t2 = time.perf_counter()
 
-    smooth_and_crop.run(args.video, args.coords, args.interval, args.out)
+    detect_pose.detect_poses(args.frames, args.pose_model, args.pose)
+    t2b = time.perf_counter()
+
+    smooth_and_crop.run(args.video, args.coords, args.interval, args.out, args.pose)
     t3 = time.perf_counter()
 
     total_sec = time.perf_counter() - start
@@ -53,7 +60,8 @@ def main():
     print("[measure] --- stage timing (sec) ---")
     print(f"[measure] extract_frames : {t1 - t0:.3f}")
     print(f"[measure] detect_face    : {t2 - t1:.3f}")
-    print(f"[measure] smooth_and_crop: {t3 - t2:.3f}")
+    print(f"[measure] detect_pose    : {t2b - t2:.3f}")
+    print(f"[measure] smooth_and_crop: {t3 - t2b:.3f}")
     print(f"[measure] total          : {total_sec:.3f}")
     print(f"[measure] source video duration: {source_duration_sec:.3f} sec")
 

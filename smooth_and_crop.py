@@ -1,22 +1,26 @@
-"""Smooth face-center coordinates and produce a 9:16 vertical crop of the source video.
+"""Smooth face/pose-center coordinates and produce a 9:16 vertical crop of the source video.
 
 Steps:
-  1. Load per-frame face bounding boxes from coordinates.json (produced by detect_face.py).
-  2. For frames where detection failed, fall back to the last known-good center.
-     (This naturally also covers the "3+ consecutive failures" case called out in the
-     spec: the held center simply keeps being reused until detection recovers.)
-  3. Smooth the resulting per-frame centers with a trailing moving average over the
+  1. For each frame, resolve a center coordinate with a 3-tier priority:
+       1) face detection (coordinates.json from detect_face.py) if it succeeded
+       2) otherwise, Pose Landmarker (pose.json from detect_pose.py): the
+          midpoint of both shoulders if both are visible enough, else the
+          nose landmark, if either is visible enough
+       3) otherwise, hold the last known-good center (the original fallback)
+     A per-frame log of which tier was used is printed as a summary.
+  2. Smooth the resulting per-frame centers with a trailing moving average over the
      last 10 samples.
-  4. Compute a single 9:16 crop window size from the source resolution, and a
+  3. Compute a single 9:16 crop window size from the source resolution, and a
      per-timestamp crop position from the smoothed centers.
-  5. Drive ffmpeg's crop filter via the sendcmd filter (one x/y update per
+  4. Drive ffmpeg's crop filter via the sendcmd filter (one x/y update per
      timestamp) to produce output_vertical.mp4. sendcmd is used instead of a
      single nested if(lt(t,...),...) expression because that expression's
      nesting depth grows with the number of samples and exceeds ffmpeg's
      expression parser limit on anything longer than a few seconds of video.
 
 Usage:
-    python smooth_and_crop.py <input_video> [--coords coordinates.json] [--interval 0.5] [--out output_vertical.mp4]
+    python smooth_and_crop.py <input_video> [--coords coordinates.json] [--pose pose.json]
+                               [--interval 0.5] [--out output_vertical.mp4]
 """
 import argparse
 import json
@@ -27,33 +31,54 @@ import tempfile
 import cv2
 
 WINDOW = 10
-FALLBACK_STREAK_THRESHOLD = 3
+POSE_VISIBILITY_THRESHOLD = 0.5
 
 
-def load_smoothed_centers(coords_path: str, frame_w: int, frame_h: int):
+def load_smoothed_centers(coords_path: str, pose_path: str, frame_w: int, frame_h: int):
     with open(coords_path, "r", encoding="utf-8") as f:
-        entries = json.load(f)
+        face_entries = json.load(f)
+
+    pose_by_frame = {}
+    if pose_path and os.path.exists(pose_path):
+        with open(pose_path, "r", encoding="utf-8") as f:
+            pose_by_frame = {e["frame"]: e for e in json.load(f)}
 
     last_known = None
-    consecutive_failures = 0
     raw_centers = []
-    fallback_frame_count = 0
+    source_counts = {"face": 0, "pose": 0, "fallback": 0}
 
-    for entry in entries:
+    for entry in face_entries:
+        center = None
+        source = None
+
         if entry.get("detected"):
             cx = entry["x"] + entry["width"] / 2
             cy = entry["y"] + entry["height"] / 2
-            last_known = (cx, cy)
-            consecutive_failures = 0
+            center = (cx, cy)
+            source = "face"
         else:
-            consecutive_failures += 1
-            if last_known is None:
-                # No detection has ever succeeded yet; default to the frame center.
-                last_known = (frame_w / 2, frame_h / 2)
-            if consecutive_failures >= FALLBACK_STREAK_THRESHOLD:
-                fallback_frame_count += 1
-            cx, cy = last_known
-        raw_centers.append((cx, cy))
+            pose_entry = pose_by_frame.get(entry["frame"])
+            if pose_entry and pose_entry.get("detected"):
+                lm = pose_entry["landmarks"]
+                left_shoulder, right_shoulder, nose = lm["left_shoulder"], lm["right_shoulder"], lm["nose"]
+                if left_shoulder["visibility"] >= POSE_VISIBILITY_THRESHOLD and right_shoulder["visibility"] >= POSE_VISIBILITY_THRESHOLD:
+                    cx = (left_shoulder["x"] + right_shoulder["x"]) / 2 * frame_w
+                    cy = (left_shoulder["y"] + right_shoulder["y"]) / 2 * frame_h
+                    center = (cx, cy)
+                    source = "pose"
+                elif nose["visibility"] >= POSE_VISIBILITY_THRESHOLD:
+                    center = (nose["x"] * frame_w, nose["y"] * frame_h)
+                    source = "pose"
+
+        if center is None:
+            # Both face and pose failed for this frame; hold the last known-good center.
+            center = last_known if last_known is not None else (frame_w / 2, frame_h / 2)
+            source = "fallback"
+        else:
+            last_known = center
+
+        raw_centers.append(center)
+        source_counts[source] += 1
 
     smoothed = []
     for i in range(len(raw_centers)):
@@ -62,7 +87,10 @@ def load_smoothed_centers(coords_path: str, frame_w: int, frame_h: int):
         avg_y = sum(p[1] for p in window) / len(window)
         smoothed.append((avg_x, avg_y))
 
-    print(f"[smooth_and_crop] frames={len(entries)} fallback_frames(streak>={FALLBACK_STREAK_THRESHOLD})={fallback_frame_count}")
+    print(
+        f"[smooth_and_crop] frames={len(face_entries)} "
+        f"center_source: face={source_counts['face']} pose={source_counts['pose']} fallback={source_counts['fallback']}"
+    )
     return smoothed
 
 
@@ -92,7 +120,7 @@ def ffmpeg_escape_path(path: str) -> str:
     return path.replace("\\", "/").replace(":", "\\:")
 
 
-def run(video_path: str, coords_path: str, interval: float, out_path: str) -> str:
+def run(video_path: str, coords_path: str, interval: float, out_path: str, pose_path: str = "pose.json") -> str:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Failed to open video: {video_path}")
@@ -100,7 +128,7 @@ def run(video_path: str, coords_path: str, interval: float, out_path: str) -> st
     frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
-    smoothed_centers = load_smoothed_centers(coords_path, frame_w, frame_h)
+    smoothed_centers = load_smoothed_centers(coords_path, pose_path, frame_w, frame_h)
     crop_w, crop_h = compute_crop_size(frame_w, frame_h)
 
     timestamps = [i * interval for i in range(len(smoothed_centers))]
@@ -147,11 +175,12 @@ def main():
     parser = argparse.ArgumentParser(description="Smooth face coordinates and crop video to 9:16.")
     parser.add_argument("video", help="Path to the source video file")
     parser.add_argument("--coords", default="coordinates.json", help="Path to coordinates.json")
+    parser.add_argument("--pose", default="pose.json", help="Path to pose.json (produced by detect_pose.py); used when face detection fails")
     parser.add_argument("--interval", type=float, default=0.5, help="Seconds between coordinate samples (must match extract_frames.py)")
     parser.add_argument("--out", default="output_vertical.mp4", help="Output video path")
     args = parser.parse_args()
 
-    run(args.video, args.coords, args.interval, args.out)
+    run(args.video, args.coords, args.interval, args.out, args.pose)
 
 
 if __name__ == "__main__":
