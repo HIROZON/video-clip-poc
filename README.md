@@ -22,12 +22,15 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
-MediaPipe の Face Detector タスク用モデルファイル（`models/blaze_face_short_range.tflite`）が必要です。
+MediaPipe の Face Detector タスク用モデルファイル（`models/blaze_face_full_range.tflite`）が必要です。
 未取得の場合は以下から取得してください。
 
 ```powershell
-Invoke-WebRequest -Uri "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite" -OutFile "models\blaze_face_short_range.tflite"
+Invoke-WebRequest -Uri "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/1/blaze_face_full_range.tflite" -OutFile "models\blaze_face_full_range.tflite"
 ```
+
+`blaze_face_short_range`（近距離・正面向き向け）と比較検証した結果、話者が横向き・奥にいる場面が多い
+ウェビナー録画では `blaze_face_full_range` の方が検出率が大きく高かったため、こちらを採用しています。
 
 ffmpeg / ffprobe が PATH 上で実行できる必要があります。
 

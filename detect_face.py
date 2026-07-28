@@ -1,7 +1,7 @@
 """Run MediaPipe Face Detection on extracted frames and dump bounding boxes to JSON.
 
 Usage:
-    python detect_face.py [--frames frames] [--model models/blaze_face_short_range.tflite]
+    python detect_face.py [--frames frames] [--model models/blaze_face_full_range.tflite]
                            [--out coordinates.json] [--threshold 0.5]
 
 Confidence handling
@@ -135,7 +135,7 @@ def detect_faces(frames_dir: str, model_path: str, out_path: str, threshold: flo
 def main():
     parser = argparse.ArgumentParser(description="Detect faces in extracted frames using MediaPipe.")
     parser.add_argument("--frames", default="frames", help="Directory containing extracted frames")
-    parser.add_argument("--model", default="models/blaze_face_short_range.tflite", help="Path to MediaPipe face detector model")
+    parser.add_argument("--model", default="models/blaze_face_full_range.tflite", help="Path to MediaPipe face detector model")
     parser.add_argument("--out", default="coordinates.json", help="Output JSON path")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD, help="Minimum confidence score to accept a detection")
     args = parser.parse_args()

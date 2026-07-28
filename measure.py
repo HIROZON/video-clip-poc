@@ -5,7 +5,7 @@ of source video (seconds of processing per minute of input).
 
 Usage:
     python measure.py <input_video> [--interval 0.5] [--frames frames]
-                       [--model models/blaze_face_short_range.tflite]
+                       [--model models/blaze_face_full_range.tflite]
                        [--coords coordinates.json] [--out output_vertical.mp4]
 """
 import argparse
@@ -23,7 +23,7 @@ def main():
     parser.add_argument("video", help="Path to the source video file")
     parser.add_argument("--interval", type=float, default=0.5, help="Frame sampling interval in seconds")
     parser.add_argument("--frames", default="frames", help="Directory for extracted frames")
-    parser.add_argument("--model", default="models/blaze_face_short_range.tflite", help="Path to MediaPipe face detector model")
+    parser.add_argument("--model", default="models/blaze_face_full_range.tflite", help="Path to MediaPipe face detector model")
     parser.add_argument("--coords", default="coordinates.json", help="Output path for detected coordinates")
     parser.add_argument("--out", default="output_vertical.mp4", help="Output cropped video path")
     args = parser.parse_args()
